@@ -66,13 +66,14 @@ DEFAULT_CONFIG = {
     "btn_color": "#3498DB",
     "font_family": "Microsoft YaHei",
     "font_size": 12,
-    "result_font_size": 28,
+    "result_font_size": 36,  # 增大默认字体，适配大屏
     "window_width": 420,
     "window_height": 520,
     "tts_enabled": True,
     "display_duration": 2000,
     "mode": "normal",
-    "admin_password_hash": hashlib.sha256("114514".encode()).hexdigest()
+    "admin_password_hash": hashlib.sha256("114514".encode()).hexdigest(),
+    "first_run": True,  # 新增：首次运行标志
 }
 
 _XOR_KEY = b'\x5a\x3c\x7e\x1f\x8d\x4b\x2e\x9f\x6c\x3a\x7b\x1e\x8c\x4a\x2d\x9e'
@@ -155,6 +156,9 @@ def save_config(config):
 
 class ClassroomCaller:
     def __init__(self):
+        # ---------- DPI 感知（修复大屏幕字体马赛克） ----------
+        self.set_dpi_awareness()
+
         self.config = load_config()
         self.bg_color = self.config["bg_color"]
         self.fg_color = self.config["fg_color"]
@@ -167,6 +171,7 @@ class ClassroomCaller:
         self.tts_enabled = self.config.get("tts_enabled", True)
         self.display_duration = self.config.get("display_duration", 2000)
         self.current_mode = self.config.get("mode", "normal")
+        self.first_run = self.config.get("first_run", True)  # 读取首次运行标志
 
         self.students = load_binary_data(STUDENTS_BIN, DEFAULT_STUDENTS.copy())
         self.groups = load_binary_data(GROUPS_BIN, DEFAULT_GROUPS.copy())
@@ -244,6 +249,21 @@ class ClassroomCaller:
         self.root.protocol("WM_DELETE_WINDOW", self.quit_app)
         self.root.mainloop()
 
+    # ---------- DPI 感知 ----------
+    def set_dpi_awareness(self):
+        """启用 Windows DPI 感知，防止高分辨率屏幕字体模糊"""
+        try:
+            # Windows 10/11
+            ctypes.windll.shcore.SetProcessDpiAwareness(1)  # PROCESS_PER_MONITOR_DPI_AWARE
+        except AttributeError:
+            try:
+                # 旧版 Windows
+                ctypes.windll.user32.SetProcessDPIAware()
+            except:
+                pass
+        except Exception:
+            pass
+
     # ---------- 权重抽取 ----------
     def weighted_choice(self, items):
         """根据 self.weights 进行加权随机选择"""
@@ -310,7 +330,84 @@ class ClassroomCaller:
                  bg='#2C3E50', fg='#7F8C8D').pack(side=tk.BOTTOM, pady=20)
 
         self._force_topmost(splash)
-        self.root.after(2000, splash.destroy)
+        # 修改：splash 关闭后检查首次运行
+        def on_splash_close():
+            splash.destroy()
+            self.root.after(100, self.check_first_run)
+        splash.after(2000, on_splash_close)
+
+    # ---------- 新手导引 ----------
+    def check_first_run(self):
+        """检查是否为首次运行，若是则显示引导窗口"""
+        if not self.first_run:
+            return
+        # 显示引导窗口
+        guide_win = tk.Toplevel(self.root)
+        guide_win.title("欢迎使用")
+        guide_win.geometry("500x500")
+        guide_win.configure(bg='#2C3E50')
+        guide_win.overrideredirect(True)
+        guide_win.attributes('-topmost', True)
+        # 居中
+        x = (self.root.winfo_screenwidth() - 500) // 2
+        y = (self.root.winfo_screenheight() - 500) // 2
+        guide_win.geometry(f"+{x}+{y}")
+        guide_win.transient(self.root)
+        guide_win.grab_set()  # 模态
+
+        # 标题
+        tk.Label(guide_win, text="欢迎使用课堂轻松点名助手 Ciallo～(∠・ω< )⌒☆",
+                 font=("Microsoft YaHei", 14, "bold"),
+                 bg='#2C3E50', fg='#ECF0F1').pack(pady=10)
+
+        # 内容区域（带滚动条）
+        text_area = scrolledtext.ScrolledText(guide_win, height=18,
+                                              font=("Microsoft YaHei", 10),
+                                              bg='#34495E', fg='#ECF0F1',
+                                              wrap=tk.WORD)
+        text_area.pack(fill=tk.BOTH, expand=True, padx=15, pady=10)
+
+        guide_text = """
+本软件提供六种点名模式，满足不同课堂场景需求。
+
+【模式说明】
+・普通模式：点名、抽组、连抽（五连/十连）
+・精简模式：仅保留点名和抽组，界面清爽
+・公平模式：每人抽中一次后才重复，并展示算法步骤
+・连抽模式：专用连抽页面，结果汇总展示
+・特效模式：全屏飘动特效展示点名结果
+・极小化模式：悬浮小挂件，一键抽人，适合PPT全屏
+
+【快捷键】
+  F2  - 随机点名
+  F3  - 随机抽组
+  Ctrl+M - 最小化到悬浮球（双击恢复）
+
+【管理员初始密码】
+  114514 （建议首次使用时修改）
+
+您可以在「设置」中调整语音播报、颜色字体、停留时间等。
+所有数据自动加密保存，安全可靠。
+
+祝您课堂愉快！ (´▽`ʃ♡)ƪ
+        """
+        text_area.insert(tk.END, guide_text)
+        text_area.config(state=tk.DISABLED)
+
+        # 按钮
+        def on_confirm():
+            self.first_run = False
+            self.config["first_run"] = False
+            save_config(self.config)
+            guide_win.destroy()
+
+        btn_frame = tk.Frame(guide_win, bg='#2C3E50')
+        btn_frame.pack(pady=10)
+        tk.Button(btn_frame, text="我知道了", command=on_confirm,
+                  bg='#3498DB', fg='white', padx=20, pady=6,
+                  font=("Microsoft YaHei", 11)).pack()
+
+        self._force_topmost(guide_win)
 
     def create_title_bar(self):
         title_bar = tk.Frame(self.root, bg='#34495E', height=32)
@@ -1048,6 +1145,7 @@ class ClassroomCaller:
         self.linger_after = self.schedule_after(self.display_duration, self.reset_result)
         self.set_busy(False)
 
+    # ---------- 公平模式（重写，增加算法原理日志） ----------
     def toggle_fair_mode(self):
         if self.busy and not self.fair_active:
             return
@@ -1056,9 +1154,7 @@ class ClassroomCaller:
             if self.current_mode == "fair":
                 self.fair_btn.config(text="⚖️ 进入公平模式", command=self.toggle_fair_mode, bg=self.btn_color)
                 self.fair_status_label.config(text="")
-                self.fair_log_text.config(state=tk.NORMAL)
-                self.fair_log_text.delete('1.0', tk.END)
-                self.fair_log_text.config(state=tk.DISABLED)
+                self.hide_log()
                 self.result_var.set("公平模式")
             return
 
@@ -1079,6 +1175,7 @@ class ClassroomCaller:
         confirm_win.geometry("500x450")
         confirm_win.configure(bg='#2C3E50')
         confirm_win.overrideredirect(True)
+        confirm_win.attributes('-topmost', True)
         x = (self.root.winfo_screenwidth() - 500) // 2
         y = (self.root.winfo_screenheight() - 450) // 2
         confirm_win.geometry(f"+{x}+{y}")
@@ -1129,6 +1226,16 @@ class ClassroomCaller:
                 self.fair_btn.config(text="🎲 公平抽奖", command=self.fair_draw, bg='#27AE60')
                 self.fair_status_label.config(text="已确认，可抽奖", fg='#2ECC71')
             confirm_win.destroy()
+            # 显示日志框并写入初始信息
+            self.show_log()
+            if hasattr(self, 'fair_log_text'):
+                self.fair_log_text.config(state=tk.NORMAL)
+                self.fair_log_text.delete('1.0', tk.END)
+                self.fair_log_text.insert(tk.END, "✅ 名单已确认，点击「公平抽奖」开始抽取\n")
+                self.fair_log_text.insert(tk.END, "算法原理：每次从剩余名单中随机抽取一人，\n")
+                self.fair_log_text.insert(tk.END, "并记录随机种子、索引等过程参数。\n")
+                self.fair_log_text.insert(tk.END, "─" * 30 + "\n")
+                self.fair_log_text.config(state=tk.DISABLED)
 
         def on_cancel():
             if self.fair_confirm_after:
@@ -1138,6 +1245,7 @@ class ClassroomCaller:
             if self.current_mode == "fair":
                 self.fair_btn.config(text="⚖️ 进入公平模式", command=self.toggle_fair_mode, bg=self.btn_color)
                 self.fair_status_label.config(text="")
+            self.hide_log()
             confirm_win.destroy()
 
         confirm_btn = tk.Button(btn_frame, text="⏳ 请等待 5 秒...", state=tk.DISABLED,
@@ -1166,15 +1274,34 @@ class ClassroomCaller:
             return
         if not self.fair_pending:
             self.result_var.set("🎉 所有人已抽完！")
-            if self.current_mode == "fair":
-                self.fair_status_label.config(text="抽奖结束", fg='#F39C12')
+            self.fair_status_label.config(text="抽奖结束", fg='#F39C12')
+            if hasattr(self, 'fair_log_text'):
+                self.fair_log_text.config(state=tk.NORMAL)
+                self.fair_log_text.insert(tk.END, "🎉 所有人已抽完！\n")
+                self.fair_log_text.config(state=tk.DISABLED)
             self.set_busy(False)
             return
 
         self.set_busy(True)
         self.cancel_linger()
-        idx = self.rng.randint(0, len(self.fair_pending) - 1)
-        name = self.fair_pending.pop(idx)
+
+        # ---- 开始记录算法步骤 ----
+        if hasattr(self, 'fair_log_text'):
+            self.fair_log_text.config(state=tk.NORMAL)
+            self.fair_log_text.insert(tk.END, "🔍 算法步骤:\n")
+            self.fair_log_text.insert(tk.END, f"  1. 当前剩余人数: {len(self.fair_pending)}\n")
+            # 使用时间种子
+            seed = int(time.time() * 1000) % 10000
+            random.seed(seed)
+            idx = random.randint(0, len(self.fair_pending) - 1)
+            name = self.fair_pending.pop(idx)
+            self.fair_log_text.insert(tk.END, f"  2. 随机种子: {seed}\n")
+            self.fair_log_text.insert(tk.END, f"  3. 抽取索引: {idx} (0-based)\n")
+            self.fair_log_text.insert(tk.END, f"  4. 结果: {name}\n")
+            self.fair_log_text.insert(tk.END, "─" * 30 + "\n")
+            self.fair_log_text.see(tk.END)
+            self.fair_log_text.config(state=tk.DISABLED)
+
         self.result_var.set(f"🎉 {name} 🎉")
         self.speak(name)
         self.fair_history.append(f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] 公平抽奖: {name}")
@@ -1182,8 +1309,9 @@ class ClassroomCaller:
             self.fair_history = self.fair_history[-200:]
         save_binary_data(FAIR_HISTORY_BIN, self.fair_history)
         remaining = len(self.fair_pending)
-        if self.current_mode == "fair":
-            self.fair_status_label.config(text=f"已抽 {len(self.students)-remaining} 人", fg='#2ECC71')
+        self.fair_status_label.config(text=f"已抽 {len(self.students)-remaining} 人", fg='#2ECC71')
+
+        # 设定恢复
         self.linger_after = self.schedule_after(self.display_duration, self.reset_result)
         self.set_busy(False)
 
@@ -1197,6 +1325,7 @@ class ClassroomCaller:
             except:
                 pass
             self.fair_confirm_after = None
+        self.hide_log()
 
     def start_effect(self):
         if self.busy:
@@ -1316,7 +1445,7 @@ class ClassroomCaller:
     def import_data(self):
         file_path = filedialog.askopenfilename(
             title="选择导入文件",
-            parent=self.get_parent_window(),  # 添加 parent
+            parent=self.get_parent_window(),
             filetypes=[("文本文件", "*.txt"), ("Excel文件", "*.xlsx *.xls")]
         )
         if not file_path:
@@ -1354,7 +1483,6 @@ class ClassroomCaller:
                 return
             if messagebox.askyesno("确认", f"将导入 {len(new_list)} 名学生，确认？"):
                 self.students = new_list
-                # 清理无效权重
                 self.weights = {k: v for k, v in self.weights.items() if k in self.students}
                 save_binary_data(STUDENTS_BIN, self.students)
                 save_binary_data(WEIGHTS_BIN, self.weights)
@@ -1393,7 +1521,6 @@ class ClassroomCaller:
                 return
             self.students = new_students
             self.groups = new_groups
-            # 清理无效权重
             self.weights = {k: v for k, v in self.weights.items() if k in self.students}
             save_binary_data(STUDENTS_BIN, self.students)
             save_binary_data(GROUPS_BIN, self.groups)
@@ -1432,11 +1559,9 @@ class ClassroomCaller:
         canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
         scroll.pack(side=tk.RIGHT, fill=tk.Y)
 
-        # 鼠标滚轮支持
         def on_mousewheel(event):
             canvas.yview_scroll(int(-1*(event.delta/120)), "units")
         canvas.bind_all("<MouseWheel>", on_mousewheel)
-        # 清理滚轮绑定
         def unbind_mousewheel():
             canvas.unbind_all("<MouseWheel>")
         win.protocol("WM_DELETE_WINDOW", lambda: [unbind_mousewheel(), win.destroy()])
@@ -1587,7 +1712,6 @@ class ClassroomCaller:
         btn_var = tk.StringVar(value=config["btn_color"])
         tk.Entry(win, textvariable=btn_var, width=12).grid(row=row, column=1, sticky='w', pady=5); row += 1
 
-        # 窗口尺寸设置
         tk.Label(win, text="窗口宽度:", bg='#ECF0F1', anchor='e').grid(row=row, column=0, sticky='e', pady=5)
         width_var = tk.IntVar(value=config.get("window_width", 420))
         tk.Spinbox(win, from_=300, to=800, textvariable=width_var, width=8).grid(row=row, column=1, sticky='w', pady=5); row += 1
@@ -1608,7 +1732,7 @@ class ClassroomCaller:
 
         tk.Label(win, text="结果字体大小:", bg='#ECF0F1', anchor='e').grid(row=row, column=0, sticky='e', pady=5)
         result_size_var = tk.IntVar(value=config["result_font_size"])
-        tk.Spinbox(win, from_=16, to=48, textvariable=result_size_var, width=8).grid(row=row, column=1, sticky='w', pady=5); row += 1
+        tk.Spinbox(win, from_=16, to=60, textvariable=result_size_var, width=8).grid(row=row, column=1, sticky='w', pady=5); row += 1
 
         def apply_settings():
             config["bg_color"] = bg_var.get()
@@ -1640,7 +1764,7 @@ class ClassroomCaller:
 
 1. 普通模式：点名、抽组、五连抽、十连抽。
 2. 精简模式：仅保留点名和抽组。
-3. 公平模式：每人抽中一次后才重复，需确认名单。
+3. 公平模式：每人抽中一次后才重复，需确认名单，并展示算法步骤。
 4. 连抽模式：专用连抽页面，结果汇总展示。
 5. 特效模式：全屏Emoji飘动特效展示。
 6. 极小化模式：悬浮小挂件，一键抽人，适合PPT全屏时使用。
